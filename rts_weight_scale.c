@@ -4,21 +4,25 @@
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
+#include <assert.h>
+#include <stdio.h>
 
-_Static_assert(CONFIG_RTS_WS_STABLE_SAMPLE_COUNT > 0,
-               "CONFIG_RTS_WS_STABLE_SAMPLE_COUNT must be greater than 0");
+_Static_assert(CONFIG_RTS_WS_STABLE_SAMPLE_COUNT > 0, "CONFIG_RTS_WS_STABLE_SAMPLE_COUNT must be greater than 0");
 
 static void rts_ws_reset_stability(rts_ws_t *self)
 {
+    assert(self != NULL);
+
     self->stable_sample_count = 0;
     self->stable_sample_index = 0;
+    self->is_stable           = false;
 }
 
-static rts_ws_status_t rts_ws_convert_raw(
-    const rts_ws_t *self,
-    uint32_t raw,
-    int32_t *weight)
+static rts_ws_status_t rts_ws_convert_raw(const rts_ws_t *self, uint32_t raw, int32_t *weight)
 {
+    assert(self != NULL);
+    assert(weight != NULL);
+
     const size_t point_count = self->calibration.point_count;
     if(point_count < 2)
     {
@@ -29,6 +33,8 @@ static rts_ws_status_t rts_ws_convert_raw(
         return RTS_WS_INVALID_CALIBRATION;
     }
 
+    // Find the segment of the calibration curve that contains the raw value
+    // n0 -- n1 -- n2 -- n3
     size_t segment = 0;
     if(raw >= self->calibration.raw[point_count - 1])
     {
@@ -36,7 +42,7 @@ static rts_ws_status_t rts_ws_convert_raw(
     }
     else
     {
-        for(size_t i = 0; i + 1 < point_count; ++i)
+        for(size_t i = 0; i + 1 < point_count; i++)
         {
             if(raw <= self->calibration.raw[i + 1])
             {
@@ -46,53 +52,46 @@ static rts_ws_status_t rts_ws_convert_raw(
         }
     }
 
-    const double raw_start    = self->calibration.raw[segment];
-    const double raw_end      = self->calibration.raw[segment + 1];
-    const double weight_start = self->calibration.weight[segment];
-    const double weight_end   = self->calibration.weight[segment + 1];
-    const double ratio        = ((double)raw - raw_start) / (raw_end - raw_start);
-    const double result       = weight_start + ratio * (weight_end - weight_start);
-    const double rounded      = result >= 0.0 ? result + 0.5 : result - 0.5;
+    const int64_t raw_delta           = (int64_t)raw - (int64_t)self->calibration.raw[segment];
+    const int64_t scaled_weight_delta = raw_delta * self->k_factor_x10000[segment];
+    const int64_t computed_weight     = (int64_t)self->calibration.weight[segment] + scaled_weight_delta / 10000;
 
-    if(!isfinite(rounded) || rounded < (double)INT32_MIN ||
-       rounded > (double)INT32_MAX)
+    if(computed_weight < INT32_MIN || computed_weight > INT32_MAX)
     {
         return RTS_WS_INVALID_CALIBRATION;
     }
 
-    *weight = (int32_t)rounded;
+    *weight = (int32_t)computed_weight;
     return RTS_WS_OK;
 }
 
-rts_ws_status_t rts_ws_init(
-    rts_ws_t *self,
-    bool (*is_raw_ready)(void),
-    uint32_t (*read_raw)(void))
+rts_ws_status_t rts_ws_init(rts_ws_t *self, bool (*is_raw_ready)(void), uint32_t (*read_raw)(void))
 {
-    if(self == NULL || is_raw_ready == NULL || read_raw == NULL)
-    {
-        return RTS_WS_INVALID_ARGUMENT;
-    }
+    assert(self != NULL);
+    assert(is_raw_ready != NULL);
+    assert(read_raw != NULL);
 
     memset(self, 0, sizeof(*self));
     self->is_raw_ready = is_raw_ready;
     self->read_raw     = read_raw;
+
     return RTS_WS_OK;
 }
 
 bool rts_ws_raw_is_ready(const rts_ws_t *self)
 {
-    return (self != NULL) && (self->is_raw_ready != NULL) &&
-           (self->read_raw != NULL) && self->is_raw_ready();
+    assert(self != NULL);
+    assert(self->is_raw_ready != NULL);
+
+    return self->is_raw_ready();
 }
 
 rts_ws_status_t rts_ws_raw_read(const rts_ws_t *self, uint32_t *raw)
 {
-    if(self == NULL || raw == NULL || self->is_raw_ready == NULL ||
-       self->read_raw == NULL)
-    {
-        return RTS_WS_INVALID_ARGUMENT;
-    }
+    assert(self != NULL);
+    assert(self->is_raw_ready != NULL);
+    assert(self->read_raw != NULL);
+    assert(raw != NULL);
 
     if(!self->is_raw_ready())
     {
@@ -105,10 +104,8 @@ rts_ws_status_t rts_ws_raw_read(const rts_ws_t *self, uint32_t *raw)
 
 rts_ws_status_t rts_ws_set_calibrate(rts_ws_t *self, const rts_ws_calibration_t *calibration)
 {
-    if(self == NULL || calibration == NULL)
-    {
-        return RTS_WS_INVALID_ARGUMENT;
-    }
+    assert(self != NULL);
+    assert(calibration != NULL);
 
     if((calibration->point_count < 2) || (calibration->point_count > RTS_WS_MAX_CALIBRATION_POINTS))
     {
@@ -121,6 +118,7 @@ rts_ws_status_t rts_ws_set_calibrate(rts_ws_t *self, const rts_ws_calibration_t 
 
     for(size_t i = 1; i < point_count; ++i)
     {
+        // Ensure that the raw values are strictly increasing
         if(calibration->raw[i] <= calibration->raw[i - 1])
         {
             return RTS_WS_INVALID_CALIBRATION;
@@ -132,6 +130,7 @@ rts_ws_status_t rts_ws_set_calibrate(rts_ws_t *self, const rts_ws_calibration_t 
             return RTS_WS_INVALID_CALIBRATION;
         }
 
+        // Ensure that the weight values are either strictly increasing or strictly decreasing
         const int current_direction = weight_delta > 0 ? 1 : -1;
         if(weight_direction != 0 && current_direction != weight_direction)
         {
@@ -139,11 +138,8 @@ rts_ws_status_t rts_ws_set_calibrate(rts_ws_t *self, const rts_ws_calibration_t 
         }
         weight_direction = current_direction;
 
-        const double factor =
-            (double)weight_delta * 1000.0 /
-            ((double)calibration->raw[i] - calibration->raw[i - 1]);
-        const double rounded_factor =
-            factor >= 0.0 ? factor + 0.5 : factor - 0.5;
+        const double factor         = (double)weight_delta * 10000.0 / ((double)calibration->raw[i] - calibration->raw[i - 1]);
+        const double rounded_factor = factor >= 0.0 ? factor + 0.5 : factor - 0.5;
         if(!isfinite(rounded_factor) ||
            rounded_factor < (double)INT32_MIN ||
            rounded_factor > (double)INT32_MAX)
@@ -154,98 +150,129 @@ rts_ws_status_t rts_ws_set_calibrate(rts_ws_t *self, const rts_ws_calibration_t 
     }
 
     self->calibration = *calibration;
-    memcpy(self->k_factor_x1000, factors, sizeof(factors));
+    memcpy(self->k_factor_x10000, factors, sizeof(factors));
+    self->tare_weight = 0;
     rts_ws_reset_stability(self);
     return RTS_WS_OK;
 }
 
 const rts_ws_calibration_t *rts_ws_get_calibrate(const rts_ws_t *self)
 {
-    if(self == NULL || self->calibration.point_count < 2 ||
-       self->calibration.point_count > RTS_WS_MAX_CALIBRATION_POINTS)
-    {
-        return NULL;
-    }
+    assert(self != NULL);
 
     return &self->calibration;
 }
 
-bool rts_ws_is_stable(const rts_ws_t *self)
+rts_ws_status_t rts_ws_set_tare(rts_ws_t *self)
 {
-    if((self == NULL) || (self->stable_sample_count < CONFIG_RTS_WS_STABLE_SAMPLE_COUNT))
+    assert(self != NULL);
+
+    if(!self->is_stable)
     {
-        return false;
+        return RTS_WS_NO_SAMPLE;
     }
 
-    int32_t min_weight = self->stable_sample[0];
-    int32_t max_weight = self->stable_sample[0];
-    for(size_t i = 1; i < CONFIG_RTS_WS_STABLE_SAMPLE_COUNT; ++i)
-    {
-        if(self->stable_sample[i] < min_weight)
-        {
-            min_weight = self->stable_sample[i];
-        }
-        if(self->stable_sample[i] > max_weight)
-        {
-            max_weight = self->stable_sample[i];
-        }
-    }
+    self->tare_weight = self->weight;
 
-    return (int64_t)max_weight - min_weight <= CONFIG_RTS_WS_STABLE_RANGE;
+    return RTS_WS_OK;
 }
 
 rts_ws_status_t rts_ws_get_weight(const rts_ws_t *self, int32_t *weight)
 {
-    if((self == NULL) || (weight == NULL))
-    {
-        return RTS_WS_INVALID_ARGUMENT;
-    }
-    if(self->calibration.point_count < 2)
-    {
-        return RTS_WS_NOT_CALIBRATED;
-    }
-    if(self->calibration.point_count > RTS_WS_MAX_CALIBRATION_POINTS)
-    {
-        return RTS_WS_INVALID_CALIBRATION;
-    }
 
-    uint32_t raw                      = 0;
-    const rts_ws_status_t read_status = rts_ws_raw_read(self, &raw);
-    if(read_status != RTS_WS_OK)
-    {
-        return read_status;
-    }
+    assert(self != NULL);
+    assert(weight != NULL);
 
-    return rts_ws_convert_raw(self, raw, weight);
+    *weight = self->weight - self->tare_weight;
+
+    return RTS_WS_OK;
+}
+
+static uint32_t rts_ws_raw_filter(uint32_t v)
+{
+    // todo: implement a better filter
+    return v;
 }
 
 void rts_ws_task(rts_ws_t *self)
 {
-    if(self == NULL)
-    {
-        return;
-    }
+    assert(self != NULL);
+    assert(self->is_raw_ready != NULL);
+    assert(self->read_raw != NULL);
 
-    uint32_t raw = 0;
-    if(rts_ws_raw_read(self, &raw) != RTS_WS_OK)
+    if(self->is_raw_ready())
     {
-        rts_ws_reset_stability(self);
-        return;
-    }
+        uint32_t raw            = 0;
+        uint32_t raw_filtered   = 0;
+        int32_t weight          = 0;
+        int32_t weight_filtered = 0;
+        // read raw value
+        if(RTS_WS_OK != rts_ws_raw_read(self, &raw))
+        {
+            rts_ws_reset_stability(self);
+            return;
+        }
 
-    int32_t weight = 0;
-    if(rts_ws_convert_raw(self, raw, &weight) != RTS_WS_OK)
-    {
-        rts_ws_reset_stability(self);
-        return;
-    }
+        // filter raw value
+        raw_filtered = rts_ws_raw_filter(raw);
 
-    self->stable_sample[self->stable_sample_index] = weight;
-    self->stable_sample_index =
-        (uint16_t)((self->stable_sample_index + 1) %
-                   CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
-    if(self->stable_sample_count < CONFIG_RTS_WS_STABLE_SAMPLE_COUNT)
-    {
-        ++self->stable_sample_count;
+        // convert raw to weight
+        if(RTS_WS_OK != rts_ws_convert_raw(self, raw_filtered, &weight))
+        {
+            rts_ws_reset_stability(self);
+            return;
+        }
+
+        // store weight in stable sample buffer and stability check
+        self->stable_sample[self->stable_sample_index] = weight;
+        self->stable_sample_index++;
+        if(self->stable_sample_index >= CONFIG_RTS_WS_STABLE_SAMPLE_COUNT) self->stable_sample_index = 0;
+        if(self->stable_sample_count < CONFIG_RTS_WS_STABLE_SAMPLE_COUNT)
+        {
+            self->stable_sample_count++;
+        }
+
+        int32_t min_weight = self->stable_sample[0];
+        int32_t max_weight = self->stable_sample[0];
+        int64_t sum_weight = self->stable_sample[0];
+
+        for(size_t i = 1; i < CONFIG_RTS_WS_STABLE_SAMPLE_COUNT; ++i)
+        {
+            sum_weight += self->stable_sample[i];
+            if(self->stable_sample[i] < min_weight)
+            {
+                min_weight = self->stable_sample[i];
+            }
+            if(self->stable_sample[i] > max_weight)
+            {
+                max_weight = self->stable_sample[i];
+            }
+        }
+        weight_filtered = sum_weight / CONFIG_RTS_WS_STABLE_SAMPLE_COUNT;
+
+        if((self->stable_sample_count >= CONFIG_RTS_WS_STABLE_SAMPLE_COUNT) && self->is_stable)
+        {
+            if((weight_filtered < (self->weight - CONFIG_RTS_WS_STABLE_RANGE)) ||
+               (weight_filtered > (self->weight + CONFIG_RTS_WS_STABLE_RANGE)))
+            {
+                self->is_stable = false;
+                rts_ws_reset_stability(self);
+            }
+        }
+
+        if(!self->is_stable)
+        {
+            if((self->stable_sample_count >= CONFIG_RTS_WS_STABLE_SAMPLE_COUNT) &&
+               ((int64_t)max_weight - min_weight <= CONFIG_RTS_WS_STABLE_RANGE))
+            {
+                self->is_stable = true;
+            }
+            self->weight = weight_filtered;
+        }
+
+        printf("raw: %u,raw_filtered: %u\n", raw, raw_filtered);
+        printf("weight: %d,weight_filtered: %d\n", weight, weight_filtered);
+        printf("min_weight: %d,max_weight: %d\n", min_weight, max_weight);
+        printf("is_stable: %d,weight_output: %d\n", self->is_stable, self->weight);
     }
 }

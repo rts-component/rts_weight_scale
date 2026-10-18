@@ -1,17 +1,36 @@
+/*
+ * Copyright (c) 2020-2026, vaelin.zheng@gmail.com
+ *
+ * SPDX-License-Identifier: MIT
+ *
+ * Change Logs:
+ * Date             Author                  Notes
+ * 2026-10-18       Vaelin.Zheng            Init
+*/
+
 #include "rts_weight_scale.h"
 
+#if (CONFIG_RTS_WEIGHT_SCALE_ENABLE)
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
+
+#if(CONFIG_RTS_WS_DEBUG_ENABLE)
 #include <assert.h>
 #include <stdio.h>
+#define RTS_WS_ASSERT       assert
+#define RTS_WS_DEBUG_PRINT  printf
+#else
+#define RTS_WS_ASSERT(...)      do {} while(0)
+#define RTS_WS_DEBUG_PRINT(...) do {} while(0)
+#endif
 
 _Static_assert(CONFIG_RTS_WS_STABLE_SAMPLE_COUNT > 0, "CONFIG_RTS_WS_STABLE_SAMPLE_COUNT must be greater than 0");
 
 static void rts_ws_reset_stability(rts_ws_t *self)
 {
-    assert(self != NULL);
+    RTS_WS_ASSERT(self != NULL);
 
     self->stable_sample_count = 0;
     self->stable_sample_index = 0;
@@ -20,15 +39,15 @@ static void rts_ws_reset_stability(rts_ws_t *self)
 
 static rts_ws_status_t rts_ws_convert_raw(const rts_ws_t *self, uint32_t raw, int32_t *weight)
 {
-    assert(self != NULL);
-    assert(weight != NULL);
+    RTS_WS_ASSERT(self != NULL);
+    RTS_WS_ASSERT(weight != NULL);
 
     const size_t point_count = self->calibration.point_count;
     if(point_count < 2)
     {
         return RTS_WS_NOT_CALIBRATED;
     }
-    if(point_count > RTS_WS_MAX_CALIBRATION_POINTS)
+    if(point_count > CONFIG_RTS_WS_MAX_CALIBRATION_POINTS)
     {
         return RTS_WS_INVALID_CALIBRATION;
     }
@@ -67,9 +86,9 @@ static rts_ws_status_t rts_ws_convert_raw(const rts_ws_t *self, uint32_t raw, in
 
 rts_ws_status_t rts_ws_init(rts_ws_t *self, bool (*is_raw_ready)(void), uint32_t (*read_raw)(void))
 {
-    assert(self != NULL);
-    assert(is_raw_ready != NULL);
-    assert(read_raw != NULL);
+    RTS_WS_ASSERT(self != NULL);
+    RTS_WS_ASSERT(is_raw_ready != NULL);
+    RTS_WS_ASSERT(read_raw != NULL);
 
     memset(self, 0, sizeof(*self));
     self->is_raw_ready = is_raw_ready;
@@ -80,18 +99,18 @@ rts_ws_status_t rts_ws_init(rts_ws_t *self, bool (*is_raw_ready)(void), uint32_t
 
 bool rts_ws_raw_is_ready(const rts_ws_t *self)
 {
-    assert(self != NULL);
-    assert(self->is_raw_ready != NULL);
+    RTS_WS_ASSERT(self != NULL);
+    RTS_WS_ASSERT(self->is_raw_ready != NULL);
 
     return self->is_raw_ready();
 }
 
 rts_ws_status_t rts_ws_raw_read(const rts_ws_t *self, uint32_t *raw)
 {
-    assert(self != NULL);
-    assert(self->is_raw_ready != NULL);
-    assert(self->read_raw != NULL);
-    assert(raw != NULL);
+    RTS_WS_ASSERT(self != NULL);
+    RTS_WS_ASSERT(self->is_raw_ready != NULL);
+    RTS_WS_ASSERT(self->read_raw != NULL);
+    RTS_WS_ASSERT(raw != NULL);
 
     if(!self->is_raw_ready())
     {
@@ -104,17 +123,17 @@ rts_ws_status_t rts_ws_raw_read(const rts_ws_t *self, uint32_t *raw)
 
 rts_ws_status_t rts_ws_set_calibrate(rts_ws_t *self, const rts_ws_calibration_t *calibration)
 {
-    assert(self != NULL);
-    assert(calibration != NULL);
+    RTS_WS_ASSERT(self != NULL);
+    RTS_WS_ASSERT(calibration != NULL);
 
-    if((calibration->point_count < 2) || (calibration->point_count > RTS_WS_MAX_CALIBRATION_POINTS))
+    if((calibration->point_count < 2) || (calibration->point_count > CONFIG_RTS_WS_MAX_CALIBRATION_POINTS))
     {
         return RTS_WS_INVALID_CALIBRATION;
     }
 
     const size_t point_count                           = calibration->point_count;
     int weight_direction                               = 0;
-    int32_t factors[RTS_WS_MAX_CALIBRATION_POINTS - 1] = {0};
+    int32_t factors[CONFIG_RTS_WS_MAX_CALIBRATION_POINTS - 1] = {0};
 
     for(size_t i = 1; i < point_count; ++i)
     {
@@ -158,14 +177,14 @@ rts_ws_status_t rts_ws_set_calibrate(rts_ws_t *self, const rts_ws_calibration_t 
 
 const rts_ws_calibration_t *rts_ws_get_calibrate(const rts_ws_t *self)
 {
-    assert(self != NULL);
+    RTS_WS_ASSERT(self != NULL);
 
     return &self->calibration;
 }
 
 rts_ws_status_t rts_ws_set_tare(rts_ws_t *self)
 {
-    assert(self != NULL);
+    RTS_WS_ASSERT(self != NULL);
 
     if(!self->is_stable)
     {
@@ -180,8 +199,8 @@ rts_ws_status_t rts_ws_set_tare(rts_ws_t *self)
 rts_ws_status_t rts_ws_get_weight(const rts_ws_t *self, int32_t *weight)
 {
 
-    assert(self != NULL);
-    assert(weight != NULL);
+    RTS_WS_ASSERT(self != NULL);
+    RTS_WS_ASSERT(weight != NULL);
 
     *weight = self->weight - self->tare_weight;
 
@@ -196,9 +215,9 @@ static uint32_t rts_ws_raw_filter(uint32_t v)
 
 void rts_ws_task(rts_ws_t *self)
 {
-    assert(self != NULL);
-    assert(self->is_raw_ready != NULL);
-    assert(self->read_raw != NULL);
+    RTS_WS_ASSERT(self != NULL);
+    RTS_WS_ASSERT(self->is_raw_ready != NULL);
+    RTS_WS_ASSERT(self->read_raw != NULL);
 
     if(self->is_raw_ready())
     {
@@ -270,9 +289,25 @@ void rts_ws_task(rts_ws_t *self)
             self->weight = weight_filtered;
         }
 
-        // printf("raw: %u,raw_filtered: %u\n", raw, raw_filtered);
-        // printf("weight: %d,weight_filtered: %d\n", weight, weight_filtered);
-        // printf("min_weight: %d,max_weight: %d\n", min_weight, max_weight);
-        // printf("is_stable: %d,weight_output: %d\n", self->is_stable, self->weight);
+        #if(CONFIG_RTS_WS_DEBUG_ENABLE)
+        // raw, raw_filtered, weight, weight_filtered, min_weight, max_weight, stable, weight
+        static bool is_title_printed = false;
+        if(!is_title_printed)
+        {
+            RTS_WS_DEBUG_PRINT("raw, raw_filtered, weight, weight_filtered, min_weight, max_weight, is_stable, weight\n");
+            is_title_printed = true;
+        }
+        RTS_WS_DEBUG_PRINT("%u, %u, %d, %d, %d, %d, %d, %d\n",
+                           raw,
+                           raw_filtered,
+                           weight,
+                           weight_filtered,
+                           min_weight,
+                           max_weight,
+                           self->is_stable,
+                           self->weight);
+        #endif
     }
 }
+
+#endif // CONFIG_RTS_WEIGHT_SCALE_ENABLE

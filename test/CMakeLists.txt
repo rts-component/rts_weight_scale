@@ -28,6 +28,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 	..
 )
 
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+	KCONFIG_HEADER_FILE="rts_cfg.h"
+)
+
 target_link_libraries(${PROJECT_NAME} PRIVATE unity)
 
 enable_testing()

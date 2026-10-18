@@ -136,12 +136,12 @@ void test_if_calibration_accepts_two_and_maximum_point_counts(void)
     TEST_ASSERT_EQUAL_UINT8(2, rts_ws_get_calibrate(&ws)->point_count);
 
     const rts_ws_calibration_t maximum_points = {
-        .point_count = RTS_WS_MAX_CALIBRATION_POINTS,
+        .point_count = CONFIG_RTS_WS_MAX_CALIBRATION_POINTS,
         .raw         = {10, 20, 30, 40},
         .weight      = {0, 100, 200, 300},
     };
     TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &maximum_points));
-    TEST_ASSERT_EQUAL_UINT8(RTS_WS_MAX_CALIBRATION_POINTS,
+    TEST_ASSERT_EQUAL_UINT8(CONFIG_RTS_WS_MAX_CALIBRATION_POINTS,
                             rts_ws_get_calibrate(&ws)->point_count);
     TEST_ASSERT_EQUAL_UINT32(40, rts_ws_get_calibrate(&ws)->raw[3]);
     TEST_ASSERT_EQUAL_INT32(300, rts_ws_get_calibrate(&ws)->weight[3]);
@@ -158,7 +158,7 @@ void test_if_calibration_rejects_invalid_point_counts(void)
     TEST_ASSERT_EQUAL(RTS_WS_INVALID_CALIBRATION,
                       rts_ws_set_calibrate(&ws, &calibration));
 
-    calibration.point_count = RTS_WS_MAX_CALIBRATION_POINTS + 1;
+    calibration.point_count = CONFIG_RTS_WS_MAX_CALIBRATION_POINTS + 1;
     TEST_ASSERT_EQUAL(RTS_WS_INVALID_CALIBRATION,
                       rts_ws_set_calibrate(&ws, &calibration));
 }
@@ -309,17 +309,21 @@ void test_if_conversion_supports_decreasing_weight_calibration(void)
 
 void test_if_stability_requires_a_full_window_and_uses_configured_range(void)
 {
+    const int32_t base  = 40;
+    const int32_t delta = CONFIG_RTS_WS_STABLE_RANGE;
+
     reset_fixture();
     set_two_point_calibration(0, 0, 100, 100);
 
-    feed_constant_raw(0, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT - 1);
+    feed_constant_raw((uint32_t)base, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT - 1);
     TEST_ASSERT_FALSE(ws.is_stable);
     TEST_ASSERT_EQUAL_UINT16(CONFIG_RTS_WS_STABLE_SAMPLE_COUNT - 1,
                              ws.stable_sample_count);
 
-    feed_raw(10);
+    feed_raw((uint32_t)(base + delta));
     TEST_ASSERT_TRUE(ws.is_stable);
-    TEST_ASSERT_EQUAL_INT32(2, ws.weight);
+    TEST_ASSERT_EQUAL_INT32(base + delta / CONFIG_RTS_WS_STABLE_SAMPLE_COUNT,
+                            ws.weight);
 }
 
 void test_if_stability_rejects_samples_outside_configured_range(void)
@@ -327,11 +331,8 @@ void test_if_stability_rejects_samples_outside_configured_range(void)
     reset_fixture();
     set_two_point_calibration(0, 0, 100, 100);
 
-    feed_raw(0);
-    feed_raw(0);
+    feed_constant_raw(0, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT - 1);
     feed_raw(CONFIG_RTS_WS_STABLE_RANGE + 1);
-    feed_raw(0);
-    feed_raw(0);
 
     TEST_ASSERT_FALSE(ws.is_stable);
     TEST_ASSERT_EQUAL_INT32((CONFIG_RTS_WS_STABLE_RANGE + 1) /

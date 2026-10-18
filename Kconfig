@@ -1,0 +1,39 @@
+# Kconfig for rts_weight_scale
+
+menu "rts_weight_scale"
+
+config RTS_WEIGHT_SCALE_ENABLE
+    bool "Enable rts weight scale"
+    default n
+    help
+        Select this to enable the rts weight scale component.
+
+config RTS_WS_MAX_CALIBRATION_POINTS
+    int "Maximum calibration points"
+    default 2
+    depends on RTS_WEIGHT_SCALE_ENABLE
+    help
+        Set the maximum number of calibration points to use.
+
+config RTS_WS_STABLE_RANGE
+    int "Stable range(g)"
+    default 5
+    depends on RTS_WEIGHT_SCALE_ENABLE
+    help
+        Set the stable range for weight measurement.
+
+config RTS_WS_STABLE_SAMPLE_COUNT
+    int "Stable sample count"
+    default 10
+    depends on RTS_WEIGHT_SCALE_ENABLE
+    help
+        Set the number of samples to consider for stability.
+
+config RTS_WS_DEBUG_ENABLE
+    bool "Enable debug logs"
+    default n
+    depends on RTS_WEIGHT_SCALE_ENABLE
+    help
+        Select this to enable debug logs for the rts weight scale component.
+
+endmenu

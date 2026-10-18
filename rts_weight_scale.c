@@ -270,9 +270,9 @@ void rts_ws_task(rts_ws_t *self)
             self->weight = weight_filtered;
         }
 
-        printf("raw: %u,raw_filtered: %u\n", raw, raw_filtered);
-        printf("weight: %d,weight_filtered: %d\n", weight, weight_filtered);
-        printf("min_weight: %d,max_weight: %d\n", min_weight, max_weight);
-        printf("is_stable: %d,weight_output: %d\n", self->is_stable, self->weight);
+        // printf("raw: %u,raw_filtered: %u\n", raw, raw_filtered);
+        // printf("weight: %d,weight_filtered: %d\n", weight, weight_filtered);
+        // printf("min_weight: %d,max_weight: %d\n", min_weight, max_weight);
+        // printf("is_stable: %d,weight_output: %d\n", self->is_stable, self->weight);
     }
 }

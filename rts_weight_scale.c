@@ -37,6 +37,14 @@ static void rts_ws_reset_stability(rts_ws_t *self)
     self->is_stable           = false;
 }
 
+static void rts_ws_reset_raw_filter(rts_ws_t *self)
+{
+    RTS_WS_ASSERT(self != NULL);
+
+    self->raw_filter_sample_index = 0;
+    self->raw_filter_initialized  = false;
+}
+
 static rts_ws_status_t rts_ws_convert_raw(const rts_ws_t *self, uint32_t raw, int32_t *weight)
 {
     RTS_WS_ASSERT(self != NULL);
@@ -172,6 +180,7 @@ rts_ws_status_t rts_ws_set_calibrate(rts_ws_t *self, const rts_ws_calibration_t 
     memcpy(self->k_factor_x10000, factors, sizeof(factors));
     self->tare_weight = 0;
     rts_ws_reset_stability(self);
+    rts_ws_reset_raw_filter(self);
     return RTS_WS_OK;
 }
 
@@ -207,10 +216,45 @@ rts_ws_status_t rts_ws_get_weight(const rts_ws_t *self, int32_t *weight)
     return RTS_WS_OK;
 }
 
-static uint32_t rts_ws_raw_filter(uint32_t v)
+// Median filter: rejects impulse noise while keeping step edges, so the
+// downstream averaging only has to smooth random noise.
+static uint32_t rts_ws_raw_filter(rts_ws_t *self, uint32_t raw)
 {
-    // todo: implement a better filter
-    return v;
+    uint32_t sorted_samples[CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT];
+
+    if(!self->raw_filter_initialized)
+    {
+        for(size_t i = 0; i < CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT; ++i)
+        {
+            self->raw_filter_sample[i] = raw;
+        }
+        self->raw_filter_sample_index = 0;
+        self->raw_filter_initialized  = true;
+    }
+    else
+    {
+        self->raw_filter_sample[self->raw_filter_sample_index] = raw;
+        self->raw_filter_sample_index++;
+        if(self->raw_filter_sample_index >= CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT)
+        {
+            self->raw_filter_sample_index = 0;
+        }
+    }
+
+    // Sort the samples to find the median value
+    for(size_t i = 0; i < CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT; i++)
+    {
+        const uint32_t sample = self->raw_filter_sample[i];
+        size_t j              = i;
+        while((j > 0) && (sorted_samples[j - 1] > sample))
+        {
+            sorted_samples[j] = sorted_samples[j - 1];
+            --j;
+        }
+        sorted_samples[j] = sample;
+    }
+
+    return sorted_samples[CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT / 2];
 }
 
 void rts_ws_task(rts_ws_t *self)
@@ -233,7 +277,7 @@ void rts_ws_task(rts_ws_t *self)
         }
 
         // filter raw value
-        raw_filtered = rts_ws_raw_filter(raw);
+        raw_filtered = rts_ws_raw_filter(self, raw);
 
         // convert raw to weight
         if(RTS_WS_OK != rts_ws_convert_raw(self, raw_filtered, &weight))

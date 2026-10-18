@@ -8,6 +8,16 @@ config RTS_WEIGHT_SCALE_ENABLE
     help
         Select this to enable the rts weight scale component.
 
+config RTS_WS_RAW_FILTER_SAMPLE_COUNT
+    int "Raw filter sample count"
+    range 3 31
+    default 3
+    depends on RTS_WEIGHT_SCALE_ENABLE
+    help
+        Set the odd number of raw samples used by the median filter.
+        A larger window rejects longer spikes but adds
+        (sample count - 1) / 2 samples of response latency.
+
 config RTS_WS_MAX_CALIBRATION_POINTS
     int "Maximum calibration points"
     default 2
@@ -17,7 +27,7 @@ config RTS_WS_MAX_CALIBRATION_POINTS
 
 config RTS_WS_STABLE_RANGE
     int "Stable range(g)"
-    default 5
+    default 2
     depends on RTS_WEIGHT_SCALE_ENABLE
     help
         Set the stable range for weight measurement.

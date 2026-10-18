@@ -79,6 +79,8 @@ void test_if_init_clears_state_and_stores_callbacks(void)
     TEST_ASSERT_FALSE(ws.is_stable);
     TEST_ASSERT_EQUAL_UINT16(0, ws.stable_sample_count);
     TEST_ASSERT_EQUAL_UINT16(0, ws.stable_sample_index);
+    TEST_ASSERT_EQUAL_UINT16(0, ws.raw_filter_sample_index);
+    TEST_ASSERT_FALSE(ws.raw_filter_initialized);
     TEST_ASSERT_EQUAL_UINT8(0, ws.calibration.point_count);
 }
 
@@ -307,10 +309,33 @@ void test_if_conversion_supports_decreasing_weight_calibration(void)
     TEST_ASSERT_EQUAL_INT32(500, ws.weight);
 }
 
+void test_if_raw_filter_rejects_short_spikes(void)
+{
+    const unsigned int spike_count = CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT / 2;
+    unsigned int sample_index      = 0;
+
+    reset_fixture();
+    set_two_point_calibration(0, 0, 2000, 2000);
+    feed_constant_raw(100, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
+
+    // Spikes shorter than half of the filter window must not reach the output
+    for(unsigned int i = 0; i < spike_count; ++i)
+    {
+        feed_raw(2000);
+        TEST_ASSERT_EQUAL_INT32(100, ws.stable_sample[sample_index]);
+        sample_index = (sample_index + 1) % CONFIG_RTS_WS_STABLE_SAMPLE_COUNT;
+    }
+
+    // One more spike makes them the majority and the median follows
+    feed_raw(2000);
+    TEST_ASSERT_EQUAL_INT32(2000, ws.stable_sample[sample_index]);
+}
+
 void test_if_stability_requires_a_full_window_and_uses_configured_range(void)
 {
-    const int32_t base  = 40;
-    const int32_t delta = CONFIG_RTS_WS_STABLE_RANGE;
+    const int32_t base              = 40;
+    const int32_t delta             = CONFIG_RTS_WS_STABLE_RANGE;
+    const unsigned int settle_count = CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT / 2 + 1;
 
     reset_fixture();
     set_two_point_calibration(0, 0, 100, 100);
@@ -320,24 +345,37 @@ void test_if_stability_requires_a_full_window_and_uses_configured_range(void)
     TEST_ASSERT_EQUAL_UINT16(CONFIG_RTS_WS_STABLE_SAMPLE_COUNT - 1,
                              ws.stable_sample_count);
 
-    feed_raw((uint32_t)(base + delta));
+    feed_raw((uint32_t)base);
     TEST_ASSERT_TRUE(ws.is_stable);
-    TEST_ASSERT_EQUAL_INT32(base + delta / CONFIG_RTS_WS_STABLE_SAMPLE_COUNT,
-                            ws.weight);
+    TEST_ASSERT_EQUAL_INT32(base, ws.weight);
+
+    // A change within the configured range keeps the weight stable
+    feed_constant_raw((uint32_t)(base + delta),
+                      settle_count + CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
+    TEST_ASSERT_TRUE(ws.is_stable);
+
+    // A change beyond the configured range breaks stability
+    unsigned int fed = 0;
+    while(ws.is_stable && (fed < (settle_count + 2 * CONFIG_RTS_WS_STABLE_SAMPLE_COUNT)))
+    {
+        feed_raw((uint32_t)(base + 2 * delta + 1));
+        ++fed;
+    }
+    TEST_ASSERT_FALSE(ws.is_stable);
 }
 
-void test_if_stability_rejects_samples_outside_configured_range(void)
+void test_if_stability_ignores_single_raw_spikes(void)
 {
     reset_fixture();
     set_two_point_calibration(0, 0, 100, 100);
 
-    feed_constant_raw(0, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT - 1);
+    feed_constant_raw(0, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
+    TEST_ASSERT_TRUE(ws.is_stable);
+
     feed_raw(CONFIG_RTS_WS_STABLE_RANGE + 1);
 
-    TEST_ASSERT_FALSE(ws.is_stable);
-    TEST_ASSERT_EQUAL_INT32((CONFIG_RTS_WS_STABLE_RANGE + 1) /
-                                CONFIG_RTS_WS_STABLE_SAMPLE_COUNT,
-                            ws.weight);
+    TEST_ASSERT_TRUE(ws.is_stable);
+    TEST_ASSERT_EQUAL_INT32(0, ws.weight);
 }
 
 void test_if_tare_requires_stability_and_zeroes_net_weight(void)
@@ -357,16 +395,24 @@ void test_if_tare_requires_stability_and_zeroes_net_weight(void)
 void test_if_net_weight_tracks_load_change_after_tare(void)
 {
     int32_t weight = 0;
+    const int32_t load_step =
+        (int32_t)CONFIG_RTS_WS_STABLE_SAMPLE_COUNT * (CONFIG_RTS_WS_STABLE_RANGE + 1);
+
     reset_fixture();
-    set_two_point_calibration(0, 0, 200, 200);
+    set_two_point_calibration(0, 0, 2000, 2000);
     feed_constant_raw(100, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
     TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_tare(&ws));
 
-    feed_constant_raw(150, 20);
+    // Two samples of the new load move the average outside the stable range
+    feed_constant_raw(100 + load_step,
+                      CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT / 2 + 2);
+    TEST_ASSERT_FALSE(ws.is_stable);
+
+    feed_constant_raw(100 + load_step, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
 
     TEST_ASSERT_TRUE(ws.is_stable);
     TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_get_weight(&ws, &weight));
-    TEST_ASSERT_EQUAL_INT32(50, weight);
+    TEST_ASSERT_EQUAL_INT32(load_step, weight);
 }
 
 void test_if_setting_calibration_resets_tare_and_stability(void)
@@ -383,6 +429,18 @@ void test_if_setting_calibration_resets_tare_and_stability(void)
     TEST_ASSERT_FALSE(ws.is_stable);
     TEST_ASSERT_EQUAL_UINT16(0, ws.stable_sample_count);
     TEST_ASSERT_EQUAL_UINT16(0, ws.stable_sample_index);
+}
+
+void test_if_setting_calibration_resets_raw_filter_history(void)
+{
+    reset_fixture();
+    set_two_point_calibration(0, 0, 2000, 2000);
+    feed_raw(100);
+
+    set_two_point_calibration(0, 0, 2000, 2000);
+    feed_raw(900);
+
+    TEST_ASSERT_EQUAL_INT32(900, ws.stable_sample[0]);
 }
 
 int main(void)
@@ -402,10 +460,12 @@ int main(void)
     RUN_TEST(test_if_calibrated_raw_values_convert_at_points_and_between_points);
     RUN_TEST(test_if_conversion_extrapolates_outside_calibration_range);
     RUN_TEST(test_if_conversion_supports_decreasing_weight_calibration);
+    RUN_TEST(test_if_raw_filter_rejects_short_spikes);
     RUN_TEST(test_if_stability_requires_a_full_window_and_uses_configured_range);
-    RUN_TEST(test_if_stability_rejects_samples_outside_configured_range);
+    RUN_TEST(test_if_stability_ignores_single_raw_spikes);
     RUN_TEST(test_if_tare_requires_stability_and_zeroes_net_weight);
     RUN_TEST(test_if_net_weight_tracks_load_change_after_tare);
     RUN_TEST(test_if_setting_calibration_resets_tare_and_stability);
+    RUN_TEST(test_if_setting_calibration_resets_raw_filter_history);
     return UNITY_END();
 }

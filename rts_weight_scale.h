@@ -29,12 +29,16 @@ extern "C" {
 #include "stdint.h"
 #include "stdbool.h"
 
+#ifndef CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT
+#define CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT   3
+#endif
+
 #ifndef CONFIG_RTS_WS_MAX_CALIBRATION_POINTS
 #define CONFIG_RTS_WS_MAX_CALIBRATION_POINTS    4
 #endif
 
 #ifndef CONFIG_RTS_WS_STABLE_RANGE
-#define CONFIG_RTS_WS_STABLE_RANGE              10
+#define CONFIG_RTS_WS_STABLE_RANGE              2
 #endif
 
 #ifndef CONFIG_RTS_WS_STABLE_SAMPLE_COUNT
@@ -42,6 +46,9 @@ extern "C" {
 #endif
 
 _Static_assert(CONFIG_RTS_WS_MAX_CALIBRATION_POINTS >= 2, "CONFIG_RTS_WS_MAX_CALIBRATION_POINTS must be at least 2");
+_Static_assert(CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT >= 3,"CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT must be at least 3");
+_Static_assert((CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT % 2) == 1, "CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT must be odd");
+_Static_assert(CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT <= 31, "CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT must not exceed 31");
 
 typedef enum
 {
@@ -65,12 +72,18 @@ typedef struct
     bool (*is_raw_ready)(void);
     uint32_t (*read_raw)(void);
 
+    uint32_t raw_filter_sample[CONFIG_RTS_WS_RAW_FILTER_SAMPLE_COUNT];
+    uint16_t raw_filter_sample_index;
+    bool raw_filter_initialized;
+
     rts_ws_calibration_t calibration;
     int32_t k_factor_x10000[CONFIG_RTS_WS_MAX_CALIBRATION_POINTS - 1];
+
     int32_t stable_sample[CONFIG_RTS_WS_STABLE_SAMPLE_COUNT];
     uint16_t stable_sample_count;
     uint16_t stable_sample_index;
     bool is_stable;
+
     int32_t tare_weight;
     int32_t weight;
 } rts_ws_t;

@@ -29,15 +29,25 @@ static void reset_fixture(void)
     TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_init(&ws, mock_is_raw_ready, mock_read_raw));
 }
 
+static void build_calibration(rts_ws_calibration_t *calibration, uint8_t point_count,
+                              const uint32_t *raw, const int32_t *weight)
+{
+    calibration->point_count = point_count;
+    for(uint8_t i = 0; i < point_count; ++i)
+    {
+        calibration->raw[i]    = raw[i];
+        calibration->weight[i] = weight[i];
+    }
+}
+
 static void set_two_point_calibration(uint32_t raw0, int32_t weight0,
                                       uint32_t raw1, int32_t weight1)
 {
-    const rts_ws_calibration_t calibration = {
-        .point_count = 2,
-        .raw         = {raw0, raw1},
-        .weight      = {weight0, weight1},
-    };
+    const uint32_t raw[2]    = {raw0, raw1};
+    const int32_t weight[2]  = {weight0, weight1};
+    rts_ws_calibration_t calibration;
 
+    build_calibration(&calibration, 2, raw, weight);
     TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &calibration));
 }
 
@@ -137,16 +147,24 @@ void test_if_calibration_accepts_two_and_maximum_point_counts(void)
     TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &two_points));
     TEST_ASSERT_EQUAL_UINT8(2, rts_ws_get_calibrate(&ws)->point_count);
 
-    const rts_ws_calibration_t maximum_points = {
+    rts_ws_calibration_t maximum_points = {
         .point_count = CONFIG_RTS_WS_MAX_CALIBRATION_POINTS,
-        .raw         = {10, 20, 30, 40},
-        .weight      = {0, 100, 200, 300},
     };
+    const uint8_t last_point = CONFIG_RTS_WS_MAX_CALIBRATION_POINTS - 1;
+
+    for(uint8_t i = 0; i <= last_point; ++i)
+    {
+        maximum_points.raw[i]    = 10u * (i + 1u);
+        maximum_points.weight[i] = 100 * (int32_t)i;
+    }
+
     TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &maximum_points));
     TEST_ASSERT_EQUAL_UINT8(CONFIG_RTS_WS_MAX_CALIBRATION_POINTS,
                             rts_ws_get_calibrate(&ws)->point_count);
-    TEST_ASSERT_EQUAL_UINT32(40, rts_ws_get_calibrate(&ws)->raw[3]);
-    TEST_ASSERT_EQUAL_INT32(300, rts_ws_get_calibrate(&ws)->weight[3]);
+    TEST_ASSERT_EQUAL_UINT32(10u * (last_point + 1u),
+                             rts_ws_get_calibrate(&ws)->raw[last_point]);
+    TEST_ASSERT_EQUAL_INT32(100 * (int32_t)last_point,
+                            rts_ws_get_calibrate(&ws)->weight[last_point]);
 }
 
 void test_if_calibration_rejects_invalid_point_counts(void)
@@ -167,12 +185,13 @@ void test_if_calibration_rejects_invalid_point_counts(void)
 
 void test_if_calibration_rejects_non_increasing_raw_values(void)
 {
+    const uint32_t raw_points[3]     = {10, 10, 30};
+    const int32_t weight_points[3]   = {0, 100, 200};
+    const uint8_t point_count        = CONFIG_RTS_WS_MAX_CALIBRATION_POINTS >= 3 ? 3 : 2;
+    rts_ws_calibration_t calibration;
+
     reset_fixture();
-    rts_ws_calibration_t calibration = {
-        .point_count = 3,
-        .raw         = {10, 10, 30},
-        .weight      = {0, 100, 200},
-    };
+    build_calibration(&calibration, point_count, raw_points, weight_points);
     TEST_ASSERT_EQUAL(RTS_WS_INVALID_CALIBRATION,
                       rts_ws_set_calibrate(&ws, &calibration));
 
@@ -183,24 +202,26 @@ void test_if_calibration_rejects_non_increasing_raw_values(void)
 
 void test_if_calibration_rejects_non_monotonic_weight_values(void)
 {
+    const uint32_t raw_points[3]           = {10, 20, 30};
+    const int32_t equal_weights[3]         = {0, 0, 100};
+    const int32_t direction_change[3]      = {0, 100, 50};
+    const int32_t decreasing_weights[3]    = {100, 50, 0};
+    const uint8_t point_count              = CONFIG_RTS_WS_MAX_CALIBRATION_POINTS >= 3 ? 3 : 2;
+    rts_ws_calibration_t calibration;
+
     reset_fixture();
-    rts_ws_calibration_t calibration = {
-        .point_count = 3,
-        .raw         = {10, 20, 30},
-        .weight      = {0, 0, 100},
-    };
+    build_calibration(&calibration, point_count, raw_points, equal_weights);
     TEST_ASSERT_EQUAL(RTS_WS_INVALID_CALIBRATION,
                       rts_ws_set_calibrate(&ws, &calibration));
 
-    calibration.weight[0] = 0;
-    calibration.weight[1] = 100;
-    calibration.weight[2] = 50;
-    TEST_ASSERT_EQUAL(RTS_WS_INVALID_CALIBRATION,
-                      rts_ws_set_calibrate(&ws, &calibration));
+    if(point_count >= 3)
+    {
+        build_calibration(&calibration, point_count, raw_points, direction_change);
+        TEST_ASSERT_EQUAL(RTS_WS_INVALID_CALIBRATION,
+                          rts_ws_set_calibrate(&ws, &calibration));
+    }
 
-    calibration.weight[0] = 100;
-    calibration.weight[1] = 50;
-    calibration.weight[2] = 0;
+    build_calibration(&calibration, point_count, raw_points, decreasing_weights);
     TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &calibration));
 }
 
@@ -253,36 +274,32 @@ void test_if_task_resets_stability_when_not_calibrated(void)
 
 void test_if_calibrated_raw_values_convert_at_points_and_between_points(void)
 {
-    const rts_ws_calibration_t calibration = {
-        .point_count = 4,
-        .raw         = {0, 100, 200, 300},
-        .weight      = {0, 100, 300, 600},
-    };
-    
-    reset_fixture();
-    TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &calibration));
-    feed_constant_raw(0, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
-    TEST_ASSERT_EQUAL_INT32(0, ws.weight);
+    const uint32_t raw_points[4]   = {0, 100, 200, 300};
+    const int32_t weight_points[4] = {0, 100, 300, 600};
+    const uint8_t point_count =
+        CONFIG_RTS_WS_MAX_CALIBRATION_POINTS >= 4 ? 4 : CONFIG_RTS_WS_MAX_CALIBRATION_POINTS;
+    rts_ws_calibration_t calibration;
 
-    reset_fixture();
-    TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &calibration));
-    feed_constant_raw(100, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
-    TEST_ASSERT_EQUAL_INT32(100, ws.weight);
+    build_calibration(&calibration, point_count, raw_points, weight_points);
 
-    reset_fixture();
-    TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &calibration));
-    feed_constant_raw(150, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
-    TEST_ASSERT_EQUAL_INT32(200, ws.weight);
+    for(uint8_t i = 0; i < point_count; ++i)
+    {
+        reset_fixture();
+        TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &calibration));
+        feed_constant_raw(raw_points[i], CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
+        TEST_ASSERT_EQUAL_INT32(weight_points[i], ws.weight);
+    }
 
-    reset_fixture();
-    TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &calibration));
-    feed_constant_raw(250, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
-    TEST_ASSERT_EQUAL_INT32(450, ws.weight);
+    for(uint8_t i = 0; i + 1 < point_count; ++i)
+    {
+        const uint32_t mid_raw   = (raw_points[i] + raw_points[i + 1]) / 2;
+        const int32_t mid_weight = (weight_points[i] + weight_points[i + 1]) / 2;
 
-    reset_fixture();
-    TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &calibration));
-    feed_constant_raw(300, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
-    TEST_ASSERT_EQUAL_INT32(600, ws.weight);
+        reset_fixture();
+        TEST_ASSERT_EQUAL(RTS_WS_OK, rts_ws_set_calibrate(&ws, &calibration));
+        feed_constant_raw(mid_raw, CONFIG_RTS_WS_STABLE_SAMPLE_COUNT);
+        TEST_ASSERT_EQUAL_INT32(mid_weight, ws.weight);
+    }
 }
 
 void test_if_conversion_extrapolates_outside_calibration_range(void)
